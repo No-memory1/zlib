@@ -920,27 +920,32 @@ local void putShortMSB(deflate_state *s, uInt b) {
  * applications may wish to modify it to avoid allocating a large
  * strm->next_out buffer and copying into it. (See also read_buf()).
  */
+/*len 계산을 모듈화하여 가독성 개선*/
+static inline unsigned calc_flush_len(deflate_state *s, z_streamp strm) {
+    unsigned len = s->pending;
+    if (len > strm->avail_out) len = strm->avail_out;
+    return len;
+}
+
 local void flush_pending(z_streamp strm) {
-    unsigned len;
     deflate_state *s = strm->state;
+    if (s->pending == 0) return;
 
     _tr_flush_bits(s);
-    len = s->pending;
-    if (len > strm->avail_out) len = strm->avail_out;
+
+    unsigned len = calc_flush_len(s, strm);
     if (len == 0) return;
 
     zmemcpy(strm->next_out, s->pending_out, len);
+
     strm->next_out  += len;
     s->pending_out  += len;
-    strm->total_out += len;
     strm->avail_out -= len;
+    strm->total_out += len;
     s->pending      -= len;
-    if (s->pending == 0) {
-        s->pending_out = s->pending_buf;
-    }
-}
 
-/* ===========================================================================
+    if (s->pending == 0) s->pending_out = s->pending_buf;
+}/* ===========================================================================
  * Update the header CRC with the bytes s->pending_buf[beg..s->pending - 1].
  */
 #define HCRC_UPDATE(beg) \
