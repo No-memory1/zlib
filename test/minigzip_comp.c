@@ -4,9 +4,9 @@
 #include <time.h>
 #include "zlib.h"
 
-#define CHUNK 16384
+#define CHUNK 16384  /* 한 번에 읽고 쓰는 버퍼 크기 */
 
-/* 진행률 표시 */
+/* 압축 진행률(%)을 stderr로 출력 */
 static void print_progress(z_stream *strm,
                            unsigned long long total_in_bytes,
                            int *last_percent)
@@ -23,9 +23,8 @@ static void print_progress(z_stream *strm,
     }
 }
 
-/* 공통 압축 루틴: init_func만 바꿔 호출 */
+/* 파일 압축 및 통계 계산 */
 static int run_deflate(FILE *source, FILE *dest,
-                       int (*init_func)(z_streamp strm),
                        unsigned long long *total_in,
                        unsigned long long *total_out,
                        double *elapsed_sec)
@@ -38,10 +37,10 @@ static int run_deflate(FILE *source, FILE *dest,
     int flush;
     unsigned have;
 
-    /* 파일 크기 구하기 */
+    /* 입력 파일 크기 구하기 */
     long cur = ftell(source);
     long end;
-
+    *total_in = 0;
     if (cur != -1L && fseek(source, 0, SEEK_END) == 0) {
         end = ftell(source);
         if (end > 0)
@@ -51,10 +50,14 @@ static int run_deflate(FILE *source, FILE *dest,
 
     clock_t start = clock();
 
+    /* z_stream 초기화 */
     memset(&strm, 0, sizeof(strm));
-
-    /* 핵심: init_func에 따라 Init2 또는 Init2new 적용됨 */
-    ret = init_func(&strm);
+    ret = deflateInit2(&strm,
+                       Z_DEFAULT_COMPRESSION,
+                       Z_DEFLATED,
+                       15 + 16, /* gzip 포맷 */
+                       8,
+                       Z_DEFAULT_STRATEGY);
     if (ret != Z_OK) return ret;
 
     int last_percent = -1;
@@ -73,7 +76,7 @@ static int run_deflate(FILE *source, FILE *dest,
 
         do {
             strm.avail_out = CHUNK;
-            strm.next_out  = out;
+            strm.next_out = out;
 
             ret = deflate(&strm, flush);
             if (ret == Z_STREAM_ERROR) {
@@ -100,33 +103,11 @@ static int run_deflate(FILE *source, FILE *dest,
     clock_t end_time = clock();
     *elapsed_sec = (double)(end_time - start) / CLOCKS_PER_SEC;
 
-    fprintf(stderr, "\n");
-
+    if (*total_in > 0) fprintf(stderr, "\n");
     return Z_OK;
 }
 
-/* 기존 deflateInit2 */
-int init_old(z_streamp strm)
-{
-    return deflateInit2(strm,
-                        Z_DEFAULT_COMPRESSION,
-                        Z_DEFLATED,
-                        15 + 16,  /* gzip */
-                        8,
-                        Z_DEFAULT_STRATEGY);
-}
-
-/* 새 deflateInit2new */
-int init_new(z_streamp strm)
-{
-    return deflateInit2new(strm,
-                           Z_DEFAULT_COMPRESSION,
-                           Z_DEFLATED,
-                           15 + 16,
-                           8,
-                           Z_DEFAULT_STRATEGY);
-}
-
+/* 결과 출력 */
 static void print_result(const char *title,
                          unsigned long long total_in,
                          unsigned long long total_out,
@@ -144,54 +125,40 @@ static void print_result(const char *title,
 
 int main(int argc, char **argv)
 {
-    if (argc < 4) {
-        printf("usage: %s input old.gz new.gz\n", argv[0]);
+    if (argc < 3) {
+        printf("usage: %s <input> <output.gz>\n", argv[0]);
         return 1;
     }
 
     const char *input = argv[1];
-    const char *out_old = argv[2];
-    const char *out_new = argv[3];
+    const char *output = argv[2];
 
-    /* === 1) 기존 deflateInit2() 테스트 === */
-    FILE *in1 = fopen(input, "rb");
-    FILE *o1 = fopen(out_old, "wb");
-
-    unsigned long long in_size1 = 0, out_size1 = 0;
-    double time1 = 0;
-
-    printf("Running old zlib deflateInit2()...\n");
-    int ret1 = run_deflate(in1, o1, init_old, &in_size1, &out_size1, &time1);
-
-    fclose(in1);
-    fclose(o1);
-
-    if (ret1 != Z_OK) {
-        printf("Old compression failed: %d\n", ret1);
+    FILE *in = fopen(input, "rb");
+    if (!in) {
+        perror("open input");
+        return 1;
+    }
+    FILE *out = fopen(output, "wb");
+    if (!out) {
+        perror("open output");
+        fclose(in);
         return 1;
     }
 
-    print_result("Original deflateInit2()", in_size1, out_size1, time1);
+    unsigned long long in_size = 0, out_size = 0;
+    double elapsed = 0;
 
-    /* === 2) 새 deflateInit2new() 테스트 === */
-    FILE *in2 = fopen(input, "rb");
-    FILE *o2 = fopen(out_new, "wb");
+    int ret = run_deflate(in, out, &in_size, &out_size, &elapsed);
 
-    unsigned long long in_size2 = 0, out_size2 = 0;
-    double time2 = 0;
+    fclose(in);
+    fclose(out);
 
-    printf("\nRunning new deflateInit2new()...\n");
-    int ret2 = run_deflate(in2, o2, init_new, &in_size2, &out_size2, &time2);
-
-    fclose(in2);
-    fclose(o2);
-
-    if (ret2 != Z_OK) {
-        printf("New compression failed: %d\n", ret2);
+    if (ret != Z_OK) {
+        fprintf(stderr, "compression failed: %d\n", ret);
         return 1;
     }
 
-    print_result("New deflateInit2new()", in_size2, out_size2, time2);
+    print_result("Compression Result", in_size, out_size, elapsed);
 
     return 0;
 }
