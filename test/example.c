@@ -11,6 +11,8 @@
 
 #include "zlib.h"
 #include <stdio.h>
+/*test를 위한 삽입*/
+#include <errno.h>
 
 #ifdef STDC
 #  include <string.h>
@@ -26,6 +28,7 @@
 #endif
 
 /*코드의 에러 처리는 대부분 CHECK_ERR 매크로에 의존하고 있으며, 이 매크로를 중심으로 에러 메시지를 분석*/
+/*기존에 존재하던 CHECK_ERR 수정*/
 #define CHECK_ERR(err, msg) { \
     if (err != Z_OK) { \
         fprintf(stderr, \
@@ -35,6 +38,25 @@
             exit(1); \
     } \
 }
+
+
+
+/* 새로 만든 err 함수 */
+void check_zlib_error(int err, z_stream *strm, const char *msg)
+{
+    if (err != Z_OK) {
+        /* 새로운 오류 처리 함수를 사용하여 상세 메시지를 가져옴. */
+        const char *full_msg = zlib_get_full_error(err, strm);
+        
+        /* 기존 메시지와 함께 상세 메시지를 표준 오류 스트림에 출력 */
+        fprintf(stderr, "FATAL ZLIB ERROR: %s\n", msg);
+        fprintf(stderr, "Zlib Detailed Status: %s\n", full_msg);
+
+        exit(1);
+    }   
+}
+
+
 
 static z_const char hello[] = "hello, hello!";
 /* "hello world" would be more standard, but the repeated "hello"
@@ -109,7 +131,7 @@ static void test_gzio(const char *fname, Byte *uncompr, uLong uncomprLen) {
     gzputc(file, 'h');
     if (gzputs(file, "ello") != 4) {
         const char* err_msg = gzerror(file, &err);
-        fprintf(stderr, "[gzputs err] \nError message: %s\n-> Error code: %d", err_msg, err);
+        fprintf(stderr, "[gzputs err] \nError message: %s\n-> Error code: %d", err_msg, err);  /*각각의 fprintf 수정함*/
         exit(1);
     }
     if (gzprintf(file, ", %s!", "hello") != 8) {
@@ -533,31 +555,14 @@ static void test_error_conditions(void) {
     stream.zfree = Z_NULL;
     stream.opaque = Z_NULL;
     err = deflateInit(&stream, 99);  // 유효하지 않은 레벨
-    printf("  Result: %d (Expected: Z_STREAM_ERROR = %d)\n\n", err, Z_STREAM_ERROR);
+    CHECK_ERR(err, "Z_STREAM_ERROR");
     
     /* 테스트 3: NULL 포인터 */
     printf("Test 3: NULL pointer\n");
     err = deflateInit(NULL, Z_DEFAULT_COMPRESSION);
-    printf("  Result: %d (Expected: Z_STREAM_ERROR = %d)\n\n", err, Z_STREAM_ERROR);
+    CHECK_ERR(err, "Z_STREAM_ERROR");
     
-    /* 테스트 4: 버퍼 부족 */
-    printf("Test 4: Insufficient output buffer\n");
-    memset(&stream, 0, sizeof(stream));
-    stream.zalloc = Z_NULL;
-    stream.zfree = Z_NULL;
-    stream.opaque = Z_NULL;
-    err = deflateInit(&stream, Z_DEFAULT_COMPRESSION);
-    if (err == Z_OK) {
-        stream.next_in = (Bytef*)"This is a long string that won't fit";
-        stream.avail_in = 37;
-        stream.next_out = buffer;
-        stream.avail_out = 2;  // 의도적으로 작은 버퍼
-        err = deflate(&stream, Z_FINISH);
-        printf("  Result: %d (Expected: Z_BUF_ERROR = %d)\n", err, Z_BUF_ERROR);
-        deflateEnd(&stream);
-    }
-    
-    /* 테스트 5: 손상된 데이터 압축 해제 */
+    /* 테스트 4: 손상된 데이터 압축 해제 */
     printf("\nTest 5: Corrupted compressed data\n");
     Byte corrupted[] = {0x78, 0x9c, 0xff, 0xff, 0xff, 0xff};  // 손상된 데이터
     memset(&stream, 0, sizeof(stream));
@@ -571,7 +576,7 @@ static void test_error_conditions(void) {
         stream.next_out = buffer;
         stream.avail_out = 100;
         err = inflate(&stream, Z_FINISH);
-        printf("  Result: %d (Expected: Z_DATA_ERROR = %d)\n", err, Z_DATA_ERROR);
+        CHECK_ERR(err, "Z_DATA_ERROR");
         inflateEnd(&stream);
     }
     
@@ -579,7 +584,79 @@ static void test_error_conditions(void) {
 }
 
 
+/* ===========================================================================
+ * Test error conditions_v2 - 의도적으로 에러 발생시키기
+ */
+static void test_error_conditions_v2() {
+    z_stream stream;
+    int err;
+    Byte buffer[100];
+    
+    printf("\n=== Testing Error Conditions_V2 ===\n");
+    
+        /* 테스트 1: 초기화 없이 deflate 호출 */
+    printf("Test 1: Using uninitialized stream\n");
+    memset(&stream, 0, sizeof(stream));
+    stream.next_in = (Bytef*)"test";
+    stream.avail_in = 4;
+    stream.next_out = buffer;
+    stream.avail_out = 100;
+    err = deflate(&stream, Z_FINISH);
+    check_zlib_error(err, &stream, "Deflate on uninitialized stream");
+    /*printf("  Result: %d (Expected: Z_STREAM_ERROR = %d)\n\n", err, Z_STREAM_ERROR);*/
+    
+    /* 테스트 2: 잘못된 압축 레벨 */
+    printf("Test 2: Invalid compression level\n");
+    stream.zalloc = Z_NULL;
+    stream.zfree = Z_NULL;
+    stream.opaque = Z_NULL;
+    err = deflateInit(&stream, 99);  // 유효하지 않은 레벨
+    check_zlib_error(err, &stream, "Invalid compression level");
+    
+    /* 테스트 3: NULL 포인터 */
+    printf("Test 3: NULL pointer\n");
+    err = deflateInit(NULL, Z_DEFAULT_COMPRESSION);
+    printf("  Result: %d (Expected: Z_STREAM_ERROR = %d)\n\n", err, Z_STREAM_ERROR);
+    check_zlib_error(err, &stream, "NULL pointer");
+    
+    
+    
+    /* 테스트 4: 손상된 데이터 압축 해제 */
+    printf("\nTest 5: Corrupted compressed data\n");
+    Byte corrupted[] = {0x78, 0x9c, 0xff, 0xff, 0xff, 0xff};  // 손상된 데이터
+    memset(&stream, 0, sizeof(stream));
+    stream.zalloc = Z_NULL;
+    stream.zfree = Z_NULL;
+    stream.opaque = Z_NULL;
+    err = inflateInit(&stream);
+    check_zlib_error(err, &stream, "Corrupted compressed data");
+    if (err == Z_OK) {
+        stream.next_in = corrupted;
+        stream.avail_in = sizeof(corrupted);
+        stream.next_out = buffer;
+        stream.avail_out = 100;
+        err = inflate(&stream, Z_FINISH);
+        check_zlib_error(err, &stream, "Corrupted compressed data");
+        /*printf("  Result: %d (Expected: Z_DATA_ERROR = %d)\n", err, Z_DATA_ERROR);*/
+        inflateEnd(&stream);
+    }
+ 
 
+
+    /* 테스트 5: 오류 메시지 확인 (Z_ERRNO Simulation OS) */
+    printf("Test 6: Z_ERRNO Simulation (Expected EXIT)\n");
+    
+    // 존재하지 않는 파일에 접근하는 상황을 시뮬레이션하기 위해 errno를 ENOENT로 설정
+    // Zlib 함수는 Z_ERRNO를 반환하면서 errno를 설정했을 것이라고 가정합니다.
+    errno = ENOENT;
+    err = Z_ERRNO; // Zlib에서 Z_ERRNO (-1)를 반환했다고 가정
+    
+    // Z_ERRNO 발생 및 상세 보고 후 종료 예상. OS 오류 메시지가 출력되어야 합니다.
+    check_zlib_error(err, NULL, "Simulated File I/O Error (Z_ERRNO Test)");
+
+
+    printf("\n=== Error Condition Tests Complete ===\n\n");
+}
 
 
 
@@ -619,8 +696,9 @@ int main(int argc, char *argv[]) {
     }
 
 
-    /* 강제 오류 발생하여 test
-    test_error_conditions(); */
+    /*강제 오류 발생하여 test*/
+    test_error_conditions();
+    /*test_error_conditions_v2();*/
 
 
 #ifdef Z_SOLO
