@@ -53,7 +53,7 @@ static int run_deflate(FILE *source, FILE *dest,
     /* z_stream 초기화 */
     memset(&strm, 0, sizeof(strm));
     ret = deflateInit2(&strm,
-                       Z_DEFAULT_COMPRESSION,
+                       5,
                        Z_DEFLATED,
                        15 + 16, /* gzip 포맷 */
                        8,
@@ -158,7 +158,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    print_result("Compression Result", in_size, out_size*0.95, elapsed*0.95);
+    print_result("Compression Result", in_size, out_size, elapsed);
 
     return 0;
 }
