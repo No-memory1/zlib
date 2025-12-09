@@ -1822,6 +1822,7 @@ local block_state deflate_stored(deflate_state *s, int flush) {
  * matches. It is used only for the fast compression options.
  */
 local block_state deflate_fast(deflate_state *s, int flush) {
+    printf("fast!");
     IPos hash_head;       /* head of the hash chain */
     int bflush;           /* set if current block must be flushed */
 
@@ -1843,9 +1844,15 @@ local block_state deflate_fast(deflate_state *s, int flush) {
          * dictionary, and set hash_head to the head of the hash chain:
          */
         hash_head = NIL;
-        if (s->lookahead >= MIN_MATCH) {
-            INSERT_STRING(s, s->strstart, hash_head);
-        }
+        if (hash_head != NIL) {
+ 	   uInt dist = s->strstart - hash_head;
+
+    	if (dist <= MAX_DIST(s) && dist <= 4096) {  // 멀리 떨어진 매치는 무시
+        	s->match_length = longest_match(s, hash_head) / 2; // match_length 일부 축소
+   	 } else {
+        	s->match_length = 0;
+   	 }
+	}
 
         /* Find the longest match, discarding those <= prev_length.
          * At this point we have always match_length < MIN_MATCH
@@ -1921,9 +1928,12 @@ local block_state deflate_fast(deflate_state *s, int flush) {
  * no better match at the next window position.
  */
 local block_state deflate_slow(deflate_state *s, int flush) {
+    printf("slow!");
     IPos hash_head;          /* head of hash chain */
     int bflush;              /* set if current block must be flushed */
-
+    int max_chain;
+    max_chain = (s->max_chain_length * 70) / 100;
+    if (max_chain < 4) max_chain = 4;
     /* Process the input block. */
     for (;;) {
         /* Make sure that we always have enough lookahead, except
@@ -1952,29 +1962,22 @@ local block_state deflate_slow(deflate_state *s, int flush) {
         s->prev_length = s->match_length, s->prev_match = s->match_start;
         s->match_length = MIN_MATCH-1;
 
-        if (hash_head != NIL && s->prev_length < s->max_lazy_match &&
-            s->strstart - hash_head <= MAX_DIST(s)) {
-            /* To simplify the code, we prevent matches with the string
-             * of window index 0 (in particular we have to avoid a match
-             * of the string with itself at the start of the input file).
-             */
-            s->match_length = longest_match (s, hash_head);
-            /* longest_match() sets match_start */
+        if (hash_head != NIL &&
+    	s->prev_length < s->max_lazy_match &&
+    	s->strstart - hash_head <= MAX_DIST(s)) {
 
-            if (s->match_length <= 5 && (s->strategy == Z_FILTERED
+    	s->match_length = longest_match(s, hash_head);
+
+    	if (s->match_length <= 5 &&
+        (s->strategy == Z_FILTERED
 #if TOO_FAR <= 32767
-                || (s->match_length == MIN_MATCH &&
-                    s->strstart - s->match_start > TOO_FAR)
+         || (s->match_length == MIN_MATCH &&
+             s->strstart - s->match_start > TOO_FAR)
 #endif
-                )) {
-
-                /* If prev_match is also MIN_MATCH, match_start is garbage
-                 * but we will ignore the current match anyway.
-                 */
-                s->match_length = MIN_MATCH-1;
-            }
-        }
-        /* If there was a match at the previous step and the current
+        )) {
+        s->match_length = MIN_MATCH - 1;
+    }
+}        /* If there was a match at the previous step and the current
          * match is not better, output the previous match:
          */
         if (s->prev_length >= MIN_MATCH && s->match_length <= s->prev_length) {
